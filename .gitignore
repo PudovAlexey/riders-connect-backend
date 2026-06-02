@@ -1,0 +1,19 @@
+# Secrets / local env
+.env
+.env.local
+
+# Runtime uploads
+/uploads/
+
+# Build artifacts
+/server
+/riders-connect
+*.exe
+*.out
+bin/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
