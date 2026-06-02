@@ -11,6 +11,7 @@ import (
 	"riders-connect/internal/config"
 	"riders-connect/internal/contacts"
 	"riders-connect/internal/database"
+	"riders-connect/internal/events"
 	"riders-connect/internal/garage"
 	"riders-connect/internal/geo"
 	"riders-connect/internal/media"
@@ -33,6 +34,7 @@ func main() {
 	chatRepo := chat.NewRepository(db)
 	garageRepo := garage.NewRepository(db)
 	contactsRepo := contacts.NewRepository(db)
+	eventsRepo := events.NewRepository(db)
 
 	// Services
 	authSvc := auth.NewService(authRepo, cfg)
@@ -41,6 +43,7 @@ func main() {
 	chatSvc := chat.NewService(chatRepo, profileSvc)
 	garageSvc := garage.NewService(garageRepo)
 	contactsSvc := contacts.NewService(contactsRepo, profileSvc)
+	eventsSvc := events.NewService(eventsRepo, profileSvc)
 
 	// Handlers
 	authHandler := auth.NewHandler(authSvc)
@@ -49,6 +52,7 @@ func main() {
 	chatHandler := chat.NewHandler(chatSvc)
 	garageHandler := garage.NewHandler(garageSvc)
 	contactsHandler := contacts.NewHandler(contactsSvc)
+	eventsHandler := events.NewHandler(eventsSvc)
 
 	mediaHandler, err := media.NewHandler(cfg.UploadDir, cfg.UploadBaseURL)
 	if err != nil {
@@ -113,6 +117,17 @@ func main() {
 			r.Get("/", garageHandler.List)
 			r.Post("/", garageHandler.Add)
 			r.Delete("/{id}", garageHandler.Delete)
+		})
+
+		r.Route("/events", func(r chi.Router) {
+			r.Get("/", eventsHandler.List)
+			r.Post("/", eventsHandler.Create)
+			r.Get("/{id}", eventsHandler.Get)
+			r.Patch("/{id}", eventsHandler.Update)
+			r.Delete("/{id}", eventsHandler.Delete)
+			r.Post("/{id}/invite", eventsHandler.Invite)
+			r.Post("/{id}/respond", eventsHandler.Respond)
+			r.Delete("/{id}/participants/{userID}", eventsHandler.RemoveParticipant)
 		})
 
 		r.Post("/media/upload", mediaHandler.Upload)
