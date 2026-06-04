@@ -16,6 +16,7 @@ import (
 	"riders-connect/internal/geo"
 	"riders-connect/internal/media"
 	"riders-connect/internal/middleware"
+	"riders-connect/internal/points"
 	"riders-connect/internal/profile"
 )
 
@@ -35,6 +36,7 @@ func main() {
 	garageRepo := garage.NewRepository(db)
 	contactsRepo := contacts.NewRepository(db)
 	eventsRepo := events.NewRepository(db)
+	pointsRepo := points.NewRepository(db)
 
 	// Services
 	authSvc := auth.NewService(authRepo, cfg)
@@ -44,6 +46,7 @@ func main() {
 	garageSvc := garage.NewService(garageRepo)
 	contactsSvc := contacts.NewService(contactsRepo, profileSvc)
 	eventsSvc := events.NewService(eventsRepo, profileSvc)
+	pointsSvc := points.NewService(pointsRepo)
 
 	// Handlers
 	authHandler := auth.NewHandler(authSvc)
@@ -53,6 +56,7 @@ func main() {
 	garageHandler := garage.NewHandler(garageSvc)
 	contactsHandler := contacts.NewHandler(contactsSvc)
 	eventsHandler := events.NewHandler(eventsSvc)
+	pointsHandler := points.NewHandler(pointsSvc)
 
 	mediaHandler, err := media.NewHandler(cfg.UploadDir, cfg.UploadBaseURL)
 	if err != nil {
@@ -97,6 +101,16 @@ func main() {
 		r.Route("/geo", func(r chi.Router) {
 			r.Put("/location", geoHandler.UpdateLocation)
 			r.Get("/users", geoHandler.GetUsersOnMap)
+		})
+
+		// Points of interest on the map (geo domain). "Motorcyclists" is not a
+		// stored point — it's the /geo/users layer, toggled client-side.
+		r.Route("/points", func(r chi.Router) {
+			r.Get("/", pointsHandler.List)
+			r.Post("/", pointsHandler.Create)
+			r.Get("/{id}", pointsHandler.Get)
+			r.Patch("/{id}", pointsHandler.Update)
+			r.Delete("/{id}", pointsHandler.Delete)
 		})
 
 		r.Route("/chat", func(r chi.Router) {
