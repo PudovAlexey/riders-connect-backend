@@ -18,6 +18,15 @@ echo ">>> [2/4] docker"
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 fi
+# Docker Hub anonymous pulls are rate-limited (and sometimes blocked in RU).
+# Point Docker at registry mirrors so image pulls/builds don't fail.
+if ! grep -q registry-mirrors /etc/docker/daemon.json 2>/dev/null; then
+  mkdir -p /etc/docker
+  cat > /etc/docker/daemon.json <<'JSON'
+{ "registry-mirrors": ["https://dockerhub.timeweb.cloud", "https://mirror.gcr.io"] }
+JSON
+  systemctl restart docker || service docker restart || true
+fi
 
 echo ">>> [3/4] code"
 if [ -d "$REPO_DIR/.git" ]; then
@@ -29,7 +38,7 @@ fi
 
 ENV_FILE="$REPO_DIR/deploy/.env"
 if [ ! -f "$ENV_FILE" ]; then
-  PUBIP="$(curl -s --max-time 8 ifconfig.me || hostname -I | awk '{print $1}')"
+  PUBIP="$(curl -s -4 --max-time 8 ifconfig.me || hostname -I | awk '{print $1}')"
   cat > "$ENV_FILE" <<EOF
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
 JWT_SECRET=$(openssl rand -hex 32)
