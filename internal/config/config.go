@@ -17,6 +17,7 @@ type Config struct {
 	AppEnv        string
 	UploadDir     string
 	UploadBaseURL string
+	CORSOrigins   string
 }
 
 func Load() *Config {
@@ -32,6 +33,8 @@ func Load() *Config {
 		AppEnv:        getEnv("APP_ENV", "development"),
 		UploadDir:     getEnv("UPLOAD_DIR", "./uploads"),
 		UploadBaseURL: getEnv("UPLOAD_BASE_URL", "http://localhost:8080"),
+		// Comma-separated list of allowed browser origins, or "*" for any.
+		CORSOrigins: getEnv("CORS_ORIGINS", "*"),
 	}
 }
 

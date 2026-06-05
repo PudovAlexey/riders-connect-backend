@@ -72,6 +72,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
+	r.Use(middleware.CORS(cfg.CORSOrigins))
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
@@ -86,6 +87,30 @@ func main() {
 		r.Post("/verify", authHandler.Verify)
 	})
 
+	// Public map reads: points of interest and riders are viewable by anyone,
+	// even unauthenticated. Mutations (writing your own location, creating/editing
+	// points) stay behind auth via a nested group.
+	r.Route("/geo", func(r chi.Router) {
+		r.Get("/users", geoHandler.GetUsersOnMap)
+		r.Group(func(r chi.Router) {
+			r.Use(authMW.RequireAuth)
+			r.Put("/location", geoHandler.UpdateLocation)
+		})
+	})
+
+	// "Motorcyclists" is not a stored point — it's the /geo/users layer above,
+	// toggled client-side.
+	r.Route("/points", func(r chi.Router) {
+		r.Get("/", pointsHandler.List)
+		r.Get("/{id}", pointsHandler.Get)
+		r.Group(func(r chi.Router) {
+			r.Use(authMW.RequireAuth)
+			r.Post("/", pointsHandler.Create)
+			r.Patch("/{id}", pointsHandler.Update)
+			r.Delete("/{id}", pointsHandler.Delete)
+		})
+	})
+
 	// Protected
 	r.Group(func(r chi.Router) {
 		r.Use(authMW.RequireAuth)
@@ -96,21 +121,6 @@ func main() {
 			r.Get("/search", profileHandler.Search)
 			r.Get("/by-username/{username}", profileHandler.GetByUsername)
 			r.Get("/{userID}", profileHandler.GetUser)
-		})
-
-		r.Route("/geo", func(r chi.Router) {
-			r.Put("/location", geoHandler.UpdateLocation)
-			r.Get("/users", geoHandler.GetUsersOnMap)
-		})
-
-		// Points of interest on the map (geo domain). "Motorcyclists" is not a
-		// stored point — it's the /geo/users layer, toggled client-side.
-		r.Route("/points", func(r chi.Router) {
-			r.Get("/", pointsHandler.List)
-			r.Post("/", pointsHandler.Create)
-			r.Get("/{id}", pointsHandler.Get)
-			r.Patch("/{id}", pointsHandler.Update)
-			r.Delete("/{id}", pointsHandler.Delete)
 		})
 
 		r.Route("/chat", func(r chi.Router) {
