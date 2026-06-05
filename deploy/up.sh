@@ -18,14 +18,21 @@ echo ">>> [2/4] docker"
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 fi
-# Docker Hub anonymous pulls are rate-limited (and sometimes blocked in RU).
-# Point Docker at registry mirrors so image pulls/builds don't fail.
+# Docker Hub anonymous pulls are rate-limited (and often blocked in RU). Probe a
+# few public mirrors, keep the ones reachable from THIS server, and point Docker
+# at them so image pulls/builds don't hit the limit.
 if ! grep -q registry-mirrors /etc/docker/daemon.json 2>/dev/null; then
-  mkdir -p /etc/docker
-  cat > /etc/docker/daemon.json <<'JSON'
-{ "registry-mirrors": ["https://dockerhub.timeweb.cloud", "https://mirror.gcr.io"] }
-JSON
-  systemctl restart docker || service docker restart || true
+  : > /tmp/_mirrors
+  for u in https://mirror.gcr.io https://huecker.io https://noohub.ru https://dockerhub.timeweb.cloud; do
+    curl -s -o /dev/null --max-time 8 "$u/v2/" && echo "$u" >> /tmp/_mirrors && echo "    mirror reachable: $u"
+  done
+  if [ -s /tmp/_mirrors ]; then
+    LIST=$(paste -sd, /tmp/_mirrors | sed 's/[^,]*/"&"/g')
+    mkdir -p /etc/docker
+    printf '{ "registry-mirrors": [%s] }\n' "$LIST" > /etc/docker/daemon.json
+    systemctl restart docker || service docker restart || true
+    sleep 3
+  fi
 fi
 
 echo ">>> [3/4] code"
