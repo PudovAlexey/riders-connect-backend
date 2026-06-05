@@ -1,0 +1,56 @@
+# Production stack for a single VPS: Postgres + Go backend + nginx-served frontend.
+# Only the web container is exposed (port 80); app and db stay on the internal
+# network. Secrets come from a .env file next to this one (see .env.prod.example).
+#
+# Expects both repos cloned side by side:
+#   /opt/riders/riders-connect-backend   (this file)
+#   /opt/riders/riders-connect-frontend
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: riders_connect
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/riders_connect?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      APP_ENV: production
+      PORT: 8080
+      CORS_ORIGINS: "*"
+      UPLOAD_BASE_URL: ${PUBLIC_URL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_PASS: ${SMTP_PASS}
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build: ../riders-connect-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:
