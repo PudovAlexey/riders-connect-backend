@@ -9,6 +9,7 @@ set -euo pipefail
 
 REPO_URL=https://github.com/PudovAlexey/riders-connect-backend.git
 REPO_DIR=/opt/riders
+DOMAIN="${DOMAIN:-motocade.ru}"   # public domain served over HTTPS by Caddy
 
 echo ">>> [1/4] base packages"
 export DEBIAN_FRONTEND=noninteractive
@@ -45,18 +46,20 @@ fi
 
 ENV_FILE="$REPO_DIR/deploy/.env"
 if [ ! -f "$ENV_FILE" ]; then
-  PUBIP="$(curl -s -4 --max-time 8 ifconfig.me || hostname -I | awk '{print $1}')"
   cat > "$ENV_FILE" <<EOF
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
 JWT_SECRET=$(openssl rand -hex 32)
-PUBLIC_URL=http://$PUBIP
+PUBLIC_URL=https://$DOMAIN
 SMTP_HOST=smtp.yandex.ru
 SMTP_PORT=587
 SMTP_FROM=pudo-aleksej@yandex.ru
 SMTP_PASS=eodgnjsbffcnhqkt
 EOF
-  echo ">>> generated $ENV_FILE (PUBLIC_URL=http://$PUBIP)"
+  echo ">>> generated $ENV_FILE"
 fi
+# Keep media URLs on the HTTPS domain across re-runs (fixes old http://<ip> values
+# without regenerating secrets, which would break the existing DB/JWT).
+sed -i "s#^PUBLIC_URL=.*#PUBLIC_URL=https://$DOMAIN#" "$ENV_FILE"
 
 echo ">>> [4/4] up"
 cd "$REPO_DIR/deploy"
