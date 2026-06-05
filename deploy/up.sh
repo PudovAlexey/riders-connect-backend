@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# One-shot deploy for a fresh Ubuntu VPS, runnable straight from the web console:
+#   curl -fsSL https://raw.githubusercontent.com/PudovAlexey/riders-connect-backend/main/deploy/up.sh | bash
+#
+# Installs Docker if missing, clones THIS (public) repo, generates secrets on the
+# first run, and brings up Postgres + backend + nginx-served frontend. Re-running
+# pulls the latest and rebuilds. Secrets persist in deploy/.env across runs.
+set -euo pipefail
+
+REPO_URL=https://github.com/PudovAlexey/riders-connect-backend.git
+REPO_DIR=/opt/riders
+
+echo ">>> [1/4] base packages"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq && apt-get install -y -qq git curl openssl ca-certificates >/dev/null
+
+echo ">>> [2/4] docker"
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+fi
+
+echo ">>> [3/4] code"
+if [ -d "$REPO_DIR/.git" ]; then
+  git -C "$REPO_DIR" pull --ff-only
+else
+  rm -rf "$REPO_DIR"
+  git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+fi
+
+ENV_FILE="$REPO_DIR/deploy/.env"
+if [ ! -f "$ENV_FILE" ]; then
+  PUBIP="$(curl -s --max-time 8 ifconfig.me || hostname -I | awk '{print $1}')"
+  cat > "$ENV_FILE" <<EOF
+POSTGRES_PASSWORD=$(openssl rand -hex 16)
+JWT_SECRET=$(openssl rand -hex 32)
+PUBLIC_URL=http://$PUBIP
+SMTP_HOST=smtp.yandex.ru
+SMTP_PORT=587
+SMTP_FROM=pudo-aleksej@yandex.ru
+SMTP_PASS=eodgnjsbffcnhqkt
+EOF
+  echo ">>> generated $ENV_FILE (PUBLIC_URL=http://$PUBIP)"
+fi
+
+echo ">>> [4/4] up"
+cd "$REPO_DIR/deploy"
+docker compose --env-file "$ENV_FILE" -f docker-compose.deploy.yml up -d --build
+
+echo
+echo ">>> DONE. Open: $(grep '^PUBLIC_URL=' "$ENV_FILE" | cut -d= -f2-)"
+docker compose --env-file "$ENV_FILE" -f docker-compose.deploy.yml ps

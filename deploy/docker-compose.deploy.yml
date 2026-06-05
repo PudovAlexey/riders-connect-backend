@@ -1,0 +1,55 @@
+# Single-VPS deploy that needs ONLY this (public) repo — the frontend is shipped
+# prebuilt in ./dist, so no access to the private frontend repo is required.
+# Brought up by deploy/up.sh. Run from the deploy/ directory.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: riders_connect
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/riders_connect?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      APP_ENV: production
+      PORT: 8080
+      CORS_ORIGINS: "*"
+      UPLOAD_BASE_URL: ${PUBLIC_URL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_PASS: ${SMTP_PASS}
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    image: nginx:alpine
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:
