@@ -87,16 +87,17 @@ func (s *Service) sendEmail(to, code string) error {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	tlsCfg := &tls.Config{ServerName: s.cfg.SMTPHost}
 
-	// Форсим IPv4 ("tcp4"): контейнер на дефолтном Docker-bridge не имеет IPv6-маршрута,
-	// а smtp.yandex.ru — dual-stack. Без этого dial уходил на AAAA-адрес и висел.
+	// Провайдер блокирует исходящий IPv4 SMTP (587/465 timeout) — рабочий путь только IPv6.
+	// Контейнеру включён IPv6 (docker-compose: enable_ipv6), "tcp" даёт happy-eyeballs и
+	// уходит к smtp.yandex.ru по IPv6.
 	var conn net.Conn
 	var err error
 	if s.cfg.SMTPPort == "465" {
 		// Implicit TLS (SSL) — Yandex и др. на 465.
-		conn, err = tls.DialWithDialer(dialer, "tcp4", addr, tlsCfg)
+		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
 	} else {
 		// Plaintext + STARTTLS — Gmail/Yandex на 587.
-		conn, err = dialer.Dial("tcp4", addr)
+		conn, err = dialer.Dial("tcp", addr)
 	}
 	if err != nil {
 		return err

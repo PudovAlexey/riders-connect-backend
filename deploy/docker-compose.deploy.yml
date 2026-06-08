@@ -58,3 +58,13 @@ volumes:
   uploads:
   caddy_data:
   caddy_config:
+
+# Провайдер режет исходящий IPv4 SMTP — письма с кодом уходят к smtp.yandex.ru
+# только по IPv6. Дефолтный bridge IPv6 не имеет, поэтому включаем его на сети.
+# Глобальный IPv6 контейнер получает через NAT66 (daemon.json: "ip6tables": true).
+networks:
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: fd00:d0c:e6::/64
