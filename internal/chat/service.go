@@ -18,6 +18,9 @@ var ErrForbidden = errors.New("forbidden")
 var ErrInvalidMessageType = errors.New("invalid message type")
 var ErrUserNotFound = errors.New("user not found")
 var ErrInvalidGroup = errors.New("group requires a title and at least one other member")
+var ErrMessageNotFound = errors.New("message not found")
+var ErrInvalidScope = errors.New("invalid delete scope")
+var ErrEmptyContent = errors.New("content required")
 
 // emailOnEveryMessage controls how aggressively new-message emails are sent.
 // true  → email every other member on every message (the product's current ask).
@@ -148,7 +151,7 @@ func (s *Service) GetMessages(ctx context.Context, chatID, userID uuid.UUID, lim
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	return s.repo.ListMessages(ctx, chatID, limit, offset)
+	return s.repo.ListMessages(ctx, chatID, userID, limit, offset)
 }
 
 func (s *Service) SendMessage(ctx context.Context, chatID, senderID uuid.UUID, p SendMessageParams) (*Message, error) {
@@ -180,6 +183,91 @@ func (s *Service) SendMessage(ctx context.Context, chatID, senderID uuid.UUID, p
 		go s.notifyNewMessage(senderID, chatID, msg)
 	}
 	return msg, nil
+}
+
+// loadOwnMessage fetches a message and verifies it belongs to chatID and was
+// sent by userID. Used by edit and delete-for-all, both author-only operations.
+func (s *Service) loadOwnMessage(ctx context.Context, chatID, messageID, userID uuid.UUID) (*Message, error) {
+	msg, err := s.repo.GetMessage(ctx, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if msg == nil || msg.ChatID != chatID {
+		return nil, ErrMessageNotFound
+	}
+	if msg.SenderID != userID {
+		return nil, ErrForbidden
+	}
+	return msg, nil
+}
+
+// requireMember confirms the user belongs to the chat, distinguishing a missing
+// chat (ErrNotFound) from a non-member (ErrForbidden) like the other methods.
+func (s *Service) requireMember(ctx context.Context, chatID, userID uuid.UUID) error {
+	ok, err := s.repo.IsMember(ctx, chatID, userID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		chat, err := s.repo.GetChat(ctx, chatID)
+		if err != nil {
+			return err
+		}
+		if chat == nil {
+			return ErrNotFound
+		}
+		return ErrForbidden
+	}
+	return nil
+}
+
+// EditMessage rewrites a message's content. Author-only, no time limit.
+func (s *Service) EditMessage(ctx context.Context, chatID, messageID, userID uuid.UUID, content string) (*Message, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, ErrEmptyContent
+	}
+	if err := s.requireMember(ctx, chatID, userID); err != nil {
+		return nil, err
+	}
+	if _, err := s.loadOwnMessage(ctx, chatID, messageID, userID); err != nil {
+		return nil, err
+	}
+	msg, err := s.repo.UpdateMessageContent(ctx, messageID, content)
+	if err != nil {
+		return nil, err
+	}
+	if msg == nil {
+		// Message was deleted for everyone between the load and the update.
+		return nil, ErrMessageNotFound
+	}
+	return msg, nil
+}
+
+// DeleteMessage hides a message. scope=me hides it only for the requesting
+// member; scope=all hides it for everyone and is restricted to the author.
+func (s *Service) DeleteMessage(ctx context.Context, chatID, messageID, userID uuid.UUID, scope string) error {
+	if scope != DeleteScopeMe && scope != DeleteScopeAll {
+		return ErrInvalidScope
+	}
+	if err := s.requireMember(ctx, chatID, userID); err != nil {
+		return err
+	}
+	if scope == DeleteScopeAll {
+		if _, err := s.loadOwnMessage(ctx, chatID, messageID, userID); err != nil {
+			return err
+		}
+		return s.repo.MarkMessageDeleted(ctx, messageID)
+	}
+	// scope=me: any member may hide a message they can see.
+	msg, err := s.repo.GetMessage(ctx, messageID)
+	if err != nil {
+		return err
+	}
+	if msg == nil || msg.ChatID != chatID {
+		return ErrMessageNotFound
+	}
+	return s.repo.HideMessageForUser(ctx, messageID, userID)
 }
 
 // notifyNewMessage emails every other member of the chat about a new message.

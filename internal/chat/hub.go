@@ -57,6 +57,13 @@ func (h *Hub) SendToUser(userID uuid.UUID, data []byte) {
 	}
 }
 
+// SendToUsers delivers data to each of the given users (best-effort).
+func (h *Hub) SendToUsers(userIDs []uuid.UUID, data []byte) {
+	for _, id := range userIDs {
+		h.SendToUser(id, data)
+	}
+}
+
 func (h *Hub) BroadcastAll(data []byte) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

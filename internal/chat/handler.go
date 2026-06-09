@@ -14,10 +14,11 @@ import (
 
 type Handler struct {
 	svc *Service
+	hub *Hub
 }
 
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(svc *Service, hub *Hub) *Handler {
+	return &Handler{svc: svc, hub: hub}
 }
 
 func (h *Handler) ListChats(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +196,79 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusCreated, msg)
+}
+
+func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.GetUserID(r.Context())
+	chatID, err := uuid.Parse(chi.URLParam(r, "chatID"))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid chat id")
+		return
+	}
+	messageID, err := uuid.Parse(chi.URLParam(r, "messageID"))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid message id")
+		return
+	}
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	msg, err := h.svc.EditMessage(r.Context(), chatID, messageID, userID, req.Content)
+	if err != nil {
+		h.writeMessageErr(w, err)
+		return
+	}
+	if memberIDs, err := h.svc.ListMemberIDs(r.Context(), chatID); err == nil {
+		broadcastMessageEdited(h.hub, memberIDs, msg)
+	}
+	respond.JSON(w, http.StatusOK, msg)
+}
+
+func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.GetUserID(r.Context())
+	chatID, err := uuid.Parse(chi.URLParam(r, "chatID"))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid chat id")
+		return
+	}
+	messageID, err := uuid.Parse(chi.URLParam(r, "messageID"))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid message id")
+		return
+	}
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		scope = DeleteScopeMe
+	}
+	if err := h.svc.DeleteMessage(r.Context(), chatID, messageID, userID, scope); err != nil {
+		h.writeMessageErr(w, err)
+		return
+	}
+	// Only "delete for all" is visible to other members.
+	if scope == DeleteScopeAll {
+		if memberIDs, err := h.svc.ListMemberIDs(r.Context(), chatID); err == nil {
+			broadcastMessageDeleted(h.hub, memberIDs, chatID, messageID)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeMessageErr maps edit/delete service errors to HTTP responses.
+func (h *Handler) writeMessageErr(w http.ResponseWriter, err error) {
+	switch err {
+	case ErrInvalidScope, ErrEmptyContent:
+		respond.Error(w, http.StatusBadRequest, err.Error())
+	case ErrForbidden:
+		respond.Error(w, http.StatusForbidden, "forbidden")
+	case ErrNotFound, ErrMessageNotFound:
+		respond.Error(w, http.StatusNotFound, "not found")
+	default:
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+	}
 }
 
 // resolveOne resolves a single participant from either a user_id or a username.

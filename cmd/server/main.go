@@ -102,11 +102,14 @@ func main() {
 	eventsSvc := events.NewService(eventsRepo, profileSvc, mail, pushSvc, cfg.UploadBaseURL)
 	pointsSvc := points.NewService(pointsRepo)
 
+	hub := chat.NewHub()
+	go hub.Run()
+
 	// Handlers
 	authHandler := auth.NewHandler(authSvc)
 	profileHandler := profile.NewHandler(profileSvc)
 	geoHandler := geo.NewHandler(geoSvc)
-	chatHandler := chat.NewHandler(chatSvc)
+	chatHandler := chat.NewHandler(chatSvc, hub)
 	garageHandler := garage.NewHandler(garageSvc)
 	contactsHandler := contacts.NewHandler(contactsSvc)
 	eventsHandler := events.NewHandler(eventsSvc)
@@ -118,8 +121,6 @@ func main() {
 		log.Fatalf("media handler: %v", err)
 	}
 
-	hub := chat.NewHub()
-	go hub.Run()
 	wsHandler := chat.NewWSHandler(hub, chatSvc, geoSvc, profileSvc)
 
 	authMW := middleware.NewAuth(cfg.JWTSecret)
@@ -184,6 +185,8 @@ func main() {
 			r.Post("/chats/{chatID}/members", chatHandler.AddMember)
 			r.Get("/chats/{chatID}/messages", chatHandler.GetMessages)
 			r.Post("/chats/{chatID}/messages", chatHandler.SendMessage)
+			r.Patch("/chats/{chatID}/messages/{messageID}", chatHandler.EditMessage)
+			r.Delete("/chats/{chatID}/messages/{messageID}", chatHandler.DeleteMessage)
 		})
 
 		r.Route("/contacts", func(r chi.Router) {

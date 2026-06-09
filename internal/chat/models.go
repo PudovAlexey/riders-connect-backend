@@ -25,6 +25,12 @@ var validMessageTypes = map[string]bool{
 	MessageTypeFile:      true,
 }
 
+// DeleteScope controls how far a message deletion reaches.
+const (
+	DeleteScopeMe  = "me"  // hide only for the requesting user
+	DeleteScopeAll = "all" // hide for everyone (sender only)
+)
+
 const (
 	ChatTypeDirect = "direct"
 	ChatTypeGroup  = "group"
@@ -69,6 +75,7 @@ type Message struct {
 	AttachmentURL  string          `json:"attachment_url,omitempty"`
 	AttachmentMeta json.RawMessage `json:"attachment_meta,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
+	EditedAt       *time.Time      `json:"edited_at,omitempty"`
 }
 
 type SendMessageParams struct {

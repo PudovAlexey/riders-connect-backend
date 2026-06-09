@@ -5,6 +5,9 @@
 # Runtime uploads
 /uploads/
 
+# Scraped third-party datasets (not ours to redistribute)
+/data/
+
 # Build artifacts
 /server
 /riders-connect

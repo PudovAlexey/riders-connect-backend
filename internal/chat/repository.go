@@ -176,7 +176,7 @@ func (r *Repository) ListChats(ctx context.Context, userID uuid.UUID) ([]*ChatLi
 		JOIN chat_members me ON me.chat_id = c.id AND me.user_id = $1
 		LEFT JOIN LATERAL (
 			SELECT id, sender_id, content, message_type, attachment_url, attachment_meta, created_at
-			FROM messages WHERE chat_id = c.id
+			FROM messages WHERE chat_id = c.id AND deleted_at IS NULL
 			ORDER BY created_at DESC LIMIT 1
 		) lm ON TRUE
 		ORDER BY COALESCE(lm.created_at, c.created_at) DESC
@@ -261,14 +261,19 @@ func (r *Repository) CreateMessage(ctx context.Context, chatID, senderID uuid.UU
 	return m, nil
 }
 
-func (r *Repository) ListMessages(ctx context.Context, chatID uuid.UUID, limit, offset int) ([]*Message, error) {
+func (r *Repository) ListMessages(ctx context.Context, chatID, userID uuid.UUID, limit, offset int) ([]*Message, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, chat_id, sender_id, content, message_type, attachment_url, attachment_meta, created_at
+		SELECT id, chat_id, sender_id, content, message_type, attachment_url, attachment_meta, created_at, edited_at
 		FROM messages
 		WHERE chat_id = $1
+		  AND deleted_at IS NULL
+		  AND NOT EXISTS (
+		      SELECT 1 FROM message_hidden h
+		      WHERE h.message_id = messages.id AND h.user_id = $4
+		  )
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
-	`, chatID, limit, offset)
+	`, chatID, limit, offset, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -278,13 +283,84 @@ func (r *Repository) ListMessages(ctx context.Context, chatID uuid.UUID, limit, 
 	for rows.Next() {
 		m := &Message{}
 		var rawMeta []byte
-		if err := rows.Scan(&m.ID, &m.ChatID, &m.SenderID, &m.Content, &m.MessageType, &m.AttachmentURL, &rawMeta, &m.CreatedAt); err != nil {
+		var editedAt sql.NullTime
+		if err := rows.Scan(&m.ID, &m.ChatID, &m.SenderID, &m.Content, &m.MessageType, &m.AttachmentURL, &rawMeta, &m.CreatedAt, &editedAt); err != nil {
 			return nil, err
 		}
 		if len(rawMeta) > 0 {
 			m.AttachmentMeta = json.RawMessage(rawMeta)
 		}
+		if editedAt.Valid {
+			m.EditedAt = &editedAt.Time
+		}
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
+}
+
+// GetMessage fetches a single message by ID, returning nil if it does not exist.
+func (r *Repository) GetMessage(ctx context.Context, messageID uuid.UUID) (*Message, error) {
+	m := &Message{}
+	var rawMeta []byte
+	var editedAt sql.NullTime
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, chat_id, sender_id, content, message_type, attachment_url, attachment_meta, created_at, edited_at
+		FROM messages WHERE id = $1
+	`, messageID).Scan(&m.ID, &m.ChatID, &m.SenderID, &m.Content, &m.MessageType, &m.AttachmentURL, &rawMeta, &m.CreatedAt, &editedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(rawMeta) > 0 {
+		m.AttachmentMeta = json.RawMessage(rawMeta)
+	}
+	if editedAt.Valid {
+		m.EditedAt = &editedAt.Time
+	}
+	return m, nil
+}
+
+// UpdateMessageContent rewrites a message's content and stamps edited_at.
+// It refuses messages already deleted for everyone (deleted_at set).
+func (r *Repository) UpdateMessageContent(ctx context.Context, messageID uuid.UUID, content string) (*Message, error) {
+	m := &Message{}
+	var rawMeta []byte
+	var editedAt sql.NullTime
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE messages SET content = $2, edited_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+		RETURNING id, chat_id, sender_id, content, message_type, attachment_url, attachment_meta, created_at, edited_at
+	`, messageID, content).Scan(&m.ID, &m.ChatID, &m.SenderID, &m.Content, &m.MessageType, &m.AttachmentURL, &rawMeta, &m.CreatedAt, &editedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(rawMeta) > 0 {
+		m.AttachmentMeta = json.RawMessage(rawMeta)
+	}
+	if editedAt.Valid {
+		m.EditedAt = &editedAt.Time
+	}
+	return m, nil
+}
+
+// MarkMessageDeleted hides a message for everyone (delete "for all").
+func (r *Repository) MarkMessageDeleted(ctx context.Context, messageID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE messages SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL
+	`, messageID)
+	return err
+}
+
+// HideMessageForUser hides a message only for the given user (delete "for me").
+func (r *Repository) HideMessageForUser(ctx context.Context, messageID, userID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO message_hidden (message_id, user_id) VALUES ($1, $2)
+		ON CONFLICT DO NOTHING
+	`, messageID, userID)
+	return err
 }

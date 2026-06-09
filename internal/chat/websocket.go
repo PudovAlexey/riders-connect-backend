@@ -37,6 +37,8 @@ type profileService interface {
 type wsIncoming struct {
 	Type           string          `json:"type"`
 	ChatID         string          `json:"chat_id"`
+	MessageID      string          `json:"message_id"`
+	Scope          string          `json:"scope"`
 	Content        string          `json:"content"`
 	MessageType    string          `json:"message_type"`
 	AttachmentURL  string          `json:"attachment_url"`
@@ -46,8 +48,24 @@ type wsIncoming struct {
 }
 
 type wsOutgoing struct {
-	Type    string   `json:"type"`
-	Message *Message `json:"message,omitempty"`
+	Type      string     `json:"type"`
+	Message   *Message   `json:"message,omitempty"`
+	ChatID    *uuid.UUID `json:"chat_id,omitempty"`
+	MessageID *uuid.UUID `json:"message_id,omitempty"`
+}
+
+// broadcastMessageEdited notifies chat members that a message was edited.
+func broadcastMessageEdited(hub *Hub, memberIDs []uuid.UUID, msg *Message) {
+	data, _ := json.Marshal(wsOutgoing{Type: "message_edited", Message: msg})
+	hub.SendToUsers(memberIDs, data)
+}
+
+// broadcastMessageDeleted notifies chat members that a message was deleted for
+// everyone. Only used for scope=all; "delete for me" is never broadcast.
+func broadcastMessageDeleted(hub *Hub, memberIDs []uuid.UUID, chatID, messageID uuid.UUID) {
+	cid, mid := chatID, messageID
+	data, _ := json.Marshal(wsOutgoing{Type: "message_deleted", ChatID: &cid, MessageID: &mid})
+	hub.SendToUsers(memberIDs, data)
 }
 
 type wsLocationUpdate struct {
@@ -158,8 +176,52 @@ func (h *WSHandler) readPump(conn *websocket.Conn, client *Client, userID uuid.U
 				continue
 			}
 			data, _ := json.Marshal(wsOutgoing{Type: "new_message", Message: msg})
-			for _, id := range memberIDs {
-				h.hub.SendToUser(id, data)
+			h.hub.SendToUsers(memberIDs, data)
+
+		case "edit_message":
+			chatID, err := uuid.Parse(in.ChatID)
+			if err != nil {
+				continue
+			}
+			messageID, err := uuid.Parse(in.MessageID)
+			if err != nil {
+				continue
+			}
+			msg, err := h.svc.EditMessage(ctx, chatID, messageID, userID, in.Content)
+			if err != nil {
+				log.Printf("ws edit_message: %v", err)
+				continue
+			}
+			memberIDs, err := h.svc.ListMemberIDs(ctx, chatID)
+			if err != nil {
+				continue
+			}
+			broadcastMessageEdited(h.hub, memberIDs, msg)
+
+		case "delete_message":
+			chatID, err := uuid.Parse(in.ChatID)
+			if err != nil {
+				continue
+			}
+			messageID, err := uuid.Parse(in.MessageID)
+			if err != nil {
+				continue
+			}
+			scope := in.Scope
+			if scope == "" {
+				scope = DeleteScopeMe
+			}
+			if err := h.svc.DeleteMessage(ctx, chatID, messageID, userID, scope); err != nil {
+				log.Printf("ws delete_message: %v", err)
+				continue
+			}
+			// Only "delete for all" is visible to other members.
+			if scope == DeleteScopeAll {
+				memberIDs, err := h.svc.ListMemberIDs(ctx, chatID)
+				if err != nil {
+					continue
+				}
+				broadcastMessageDeleted(h.hub, memberIDs, chatID, messageID)
 			}
 
 		case "update_location":
