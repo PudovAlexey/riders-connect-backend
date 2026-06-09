@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
@@ -20,7 +21,12 @@ type Service struct {
 }
 
 func NewService(repo *Repository, vapidPublic, vapidPrivate, vapidSubject string) *Service {
-	return &Service{repo: repo, public: vapidPublic, private: vapidPrivate, subject: vapidSubject}
+	// webpush-go prepends "mailto:" to any subject that isn't an https: URL, so a
+	// subject already starting with "mailto:" becomes "mailto:mailto:…" — which
+	// Apple rejects with BadJwtToken. Strip a leading mailto: so the library adds
+	// exactly one (https:// subjects are left untouched).
+	subject := strings.TrimPrefix(strings.TrimSpace(vapidSubject), "mailto:")
+	return &Service{repo: repo, public: vapidPublic, private: vapidPrivate, subject: subject}
 }
 
 // enabled reports whether VAPID keys are configured; if not, SendToUser is a
