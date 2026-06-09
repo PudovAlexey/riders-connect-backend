@@ -18,6 +18,9 @@ type Config struct {
 	UploadDir     string
 	UploadBaseURL string
 	CORSOrigins   string
+	VAPIDPublic   string
+	VAPIDPrivate  string
+	VAPIDSubject  string
 }
 
 func Load() *Config {
@@ -35,6 +38,10 @@ func Load() *Config {
 		UploadBaseURL: getEnv("UPLOAD_BASE_URL", "http://localhost:8080"),
 		// Comma-separated list of allowed browser origins, or "*" for any.
 		CORSOrigins: getEnv("CORS_ORIGINS", "*"),
+		// Web Push (VAPID). Empty keys disable push (callers fall back to email).
+		VAPIDPublic:  getEnv("VAPID_PUBLIC", ""),
+		VAPIDPrivate: getEnv("VAPID_PRIVATE", ""),
+		VAPIDSubject: getEnv("VAPID_SUBJECT", "mailto:pudo-aleksej@yandex.ru"),
 	}
 }
 

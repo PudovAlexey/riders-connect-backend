@@ -3,17 +3,14 @@ package auth
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"errors"
-	"fmt"
 	"log"
 	"math/big"
-	"net"
-	"net/smtp"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"riders-connect/internal/config"
+	"riders-connect/internal/mailer"
 	"riders-connect/internal/models"
 )
 
@@ -22,10 +19,11 @@ var ErrInvalidCode = errors.New("invalid or expired code")
 type Service struct {
 	repo *Repository
 	cfg  *config.Config
+	mail *mailer.Mailer
 }
 
-func NewService(repo *Repository, cfg *config.Config) *Service {
-	return &Service{repo: repo, cfg: cfg}
+func NewService(repo *Repository, cfg *config.Config, mail *mailer.Mailer) *Service {
+	return &Service{repo: repo, cfg: cfg, mail: mail}
 }
 
 func (s *Service) SendCode(ctx context.Context, email string) error {
@@ -71,75 +69,7 @@ func (s *Service) makeToken(user *models.User) (string, error) {
 }
 
 func (s *Service) sendEmail(to, code string) error {
-	if s.cfg.AppEnv == "development" || s.cfg.SMTPFrom == "" {
-		fmt.Printf("[DEV] verification code for %s: %s\n", to, code)
-		return nil
-	}
-
-	addr := s.cfg.SMTPHost + ":" + s.cfg.SMTPPort
-	body := fmt.Sprintf(
-		"From: %s\r\nTo: %s\r\nSubject: Your verification code\r\n\r\nYour code: %s\r\n",
-		s.cfg.SMTPFrom, to, code,
-	)
-
-	// Bounded dial + overall deadline, чтобы зависший SMTP (напр. egress-блок порта
-	// у хостера) не вешал запрос навсегда и не плодил горутины.
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	tlsCfg := &tls.Config{ServerName: s.cfg.SMTPHost}
-
-	// Провайдер блокирует исходящий IPv4 SMTP (587/465 timeout) — рабочий путь только IPv6.
-	// Контейнеру включён IPv6 (docker-compose: enable_ipv6), "tcp" даёт happy-eyeballs и
-	// уходит к smtp.yandex.ru по IPv6.
-	var conn net.Conn
-	var err error
-	if s.cfg.SMTPPort == "465" {
-		// Implicit TLS (SSL) — Yandex и др. на 465.
-		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
-	} else {
-		// Plaintext + STARTTLS — Gmail/Yandex на 587.
-		conn, err = dialer.Dial("tcp", addr)
-	}
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
-
-	c, err := smtp.NewClient(conn, s.cfg.SMTPHost)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-
-	if s.cfg.SMTPPort != "465" {
-		if ok, _ := c.Extension("STARTTLS"); ok {
-			if err := c.StartTLS(tlsCfg); err != nil {
-				return err
-			}
-		}
-	}
-
-	auth := smtp.PlainAuth("", s.cfg.SMTPFrom, s.cfg.SMTPPass, s.cfg.SMTPHost)
-	if err := c.Auth(auth); err != nil {
-		return err
-	}
-	if err := c.Mail(s.cfg.SMTPFrom); err != nil {
-		return err
-	}
-	if err := c.Rcpt(to); err != nil {
-		return err
-	}
-	wc, err := c.Data()
-	if err != nil {
-		return err
-	}
-	if _, err := wc.Write([]byte(body)); err != nil {
-		return err
-	}
-	if err := wc.Close(); err != nil {
-		return err
-	}
-	return c.Quit()
+	return s.mail.Send(to, "Your verification code", "Your code: "+code)
 }
 
 func randomCode(n int) (string, error) {

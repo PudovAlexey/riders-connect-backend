@@ -61,8 +61,19 @@ fi
 # without regenerating secrets, which would break the existing DB/JWT).
 sed -i "s#^PUBLIC_URL=.*#PUBLIC_URL=https://$DOMAIN#" "$ENV_FILE"
 
-echo ">>> [4/4] up"
 cd "$REPO_DIR/deploy"
+
+# Web Push needs a stable VAPID keypair. Generate it once on the server (like
+# JWT_SECRET) so the private key never lives in this public repo. Requires the
+# app image, so build it first, then run the binary's -genvapid mode.
+if ! grep -q '^VAPID_PRIVATE=' "$ENV_FILE"; then
+  echo ">>> generating VAPID keys"
+  docker compose --env-file "$ENV_FILE" -f docker-compose.deploy.yml build app
+  docker compose --env-file "$ENV_FILE" -f docker-compose.deploy.yml run --rm --no-deps app ./server -genvapid >> "$ENV_FILE"
+  echo "VAPID_SUBJECT=mailto:pudo-aleksej@yandex.ru" >> "$ENV_FILE"
+fi
+
+echo ">>> [4/4] up"
 docker compose --env-file "$ENV_FILE" -f docker-compose.deploy.yml up -d --build
 
 echo

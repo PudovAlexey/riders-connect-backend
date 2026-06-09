@@ -1,9 +1,12 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 
+	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"riders-connect/internal/auth"
@@ -14,13 +17,28 @@ import (
 	"riders-connect/internal/events"
 	"riders-connect/internal/garage"
 	"riders-connect/internal/geo"
+	"riders-connect/internal/mailer"
 	"riders-connect/internal/media"
 	"riders-connect/internal/middleware"
 	"riders-connect/internal/points"
 	"riders-connect/internal/profile"
+	"riders-connect/internal/push"
 )
 
 func main() {
+	// -genvapid prints a fresh VAPID keypair (as env lines) and exits. Used by
+	// deploy/up.sh to seed deploy/.env on first run.
+	genVAPID := flag.Bool("genvapid", false, "generate a VAPID keypair and exit")
+	flag.Parse()
+	if *genVAPID {
+		priv, pub, err := webpush.GenerateVAPIDKeys()
+		if err != nil {
+			log.Fatalf("genvapid: %v", err)
+		}
+		fmt.Printf("VAPID_PUBLIC=%s\nVAPID_PRIVATE=%s\n", pub, priv)
+		return
+	}
+
 	cfg := config.Load()
 
 	db := database.Connect(cfg.DatabaseURL)
@@ -37,15 +55,21 @@ func main() {
 	contactsRepo := contacts.NewRepository(db)
 	eventsRepo := events.NewRepository(db)
 	pointsRepo := points.NewRepository(db)
+	pushRepo := push.NewRepository(db)
+
+	// Shared SMTP transport for login codes + notification emails.
+	mail := mailer.New(cfg)
+	// Web Push (VAPID); falls back to email when keys are unset.
+	pushSvc := push.NewService(pushRepo, cfg.VAPIDPublic, cfg.VAPIDPrivate, cfg.VAPIDSubject)
 
 	// Services
-	authSvc := auth.NewService(authRepo, cfg)
+	authSvc := auth.NewService(authRepo, cfg, mail)
 	profileSvc := profile.NewService(profileRepo)
 	geoSvc := geo.NewService(geoRepo)
-	chatSvc := chat.NewService(chatRepo, profileSvc)
+	chatSvc := chat.NewService(chatRepo, profileSvc, mail, pushSvc, cfg.UploadBaseURL)
 	garageSvc := garage.NewService(garageRepo)
 	contactsSvc := contacts.NewService(contactsRepo, profileSvc)
-	eventsSvc := events.NewService(eventsRepo, profileSvc)
+	eventsSvc := events.NewService(eventsRepo, profileSvc, mail, pushSvc, cfg.UploadBaseURL)
 	pointsSvc := points.NewService(pointsRepo)
 
 	// Handlers
@@ -57,6 +81,7 @@ func main() {
 	contactsHandler := contacts.NewHandler(contactsSvc)
 	eventsHandler := events.NewHandler(eventsSvc)
 	pointsHandler := points.NewHandler(pointsSvc)
+	pushHandler := push.NewHandler(pushSvc)
 
 	mediaHandler, err := media.NewHandler(cfg.UploadDir, cfg.UploadBaseURL)
 	if err != nil {
@@ -152,6 +177,12 @@ func main() {
 			r.Post("/{id}/invite", eventsHandler.Invite)
 			r.Post("/{id}/respond", eventsHandler.Respond)
 			r.Delete("/{id}/participants/{userID}", eventsHandler.RemoveParticipant)
+		})
+
+		r.Route("/push", func(r chi.Router) {
+			r.Get("/public-key", pushHandler.PublicKey)
+			r.Post("/subscription", pushHandler.Register)
+			r.Delete("/subscription", pushHandler.Unregister)
 		})
 
 		r.Post("/media/upload", mediaHandler.Upload)

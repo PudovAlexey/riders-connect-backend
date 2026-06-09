@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"riders-connect/internal/mailer"
 	"riders-connect/internal/models"
 )
 
@@ -25,19 +28,28 @@ var (
 	ErrNotInvited          = errors.New("no pending invitation")
 )
 
-// userResolver lets the events service turn @logins into user IDs (same shape
-// the chat and contacts services use).
+// userResolver lets the events service turn @logins into user IDs and look users
+// up by ID (for invitation email addresses). profile.Service satisfies it.
 type userResolver interface {
 	GetByUsername(ctx context.Context, username string) (*models.User, error)
+	GetUser(ctx context.Context, id uuid.UUID) (*models.User, error)
+}
+
+// pushSender delivers Web Push to a user and reports how many devices got it.
+type pushSender interface {
+	SendToUser(ctx context.Context, userID uuid.UUID, title, body, url, tag string) int
 }
 
 type Service struct {
-	repo  *Repository
-	users userResolver
+	repo    *Repository
+	users   userResolver
+	mail    *mailer.Mailer
+	push    pushSender
+	baseURL string
 }
 
-func NewService(repo *Repository, users userResolver) *Service {
-	return &Service{repo: repo, users: users}
+func NewService(repo *Repository, users userResolver, mail *mailer.Mailer, push pushSender, baseURL string) *Service {
+	return &Service{repo: repo, users: users, mail: mail, push: push, baseURL: baseURL}
 }
 
 type CreateParams struct {
@@ -230,7 +242,44 @@ func (s *Service) Invite(ctx context.Context, eventID, callerID, targetID uuid.U
 	if !found || status != StatusAccepted {
 		return ErrForbidden
 	}
-	return s.repo.AddInvite(ctx, eventID, targetID, callerID)
+	if err := s.repo.AddInvite(ctx, eventID, targetID, callerID); err != nil {
+		return err
+	}
+	go s.notifyInvited(callerID, targetID, eventID, e.Title)
+	return nil
+}
+
+// notifyInvited emails a user who was just invited to an event. Best-effort/async.
+func (s *Service) notifyInvited(inviterID, targetID, eventID uuid.UUID, eventTitle string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	target, err := s.users.GetUser(ctx, targetID)
+	if err != nil || target == nil {
+		return
+	}
+	inviter, _ := s.users.GetUser(ctx, inviterID)
+	inviterName := "Кто-то"
+	if inviter != nil {
+		if strings.TrimSpace(inviter.Name) != "" {
+			inviterName = inviter.Name
+		} else if inviter.Username != "" {
+			inviterName = "@" + inviter.Username
+		}
+	}
+	subject := "Приглашение на событие"
+	intro := fmt.Sprintf("%s пригласил вас на «%s».", inviterName, eventTitle)
+	body := fmt.Sprintf("%s\n\nОткрыть: %s/events/%s", intro, s.baseURL, eventID)
+
+	delivered := 0
+	if s.push != nil {
+		delivered = s.push.SendToUser(ctx, targetID, subject, intro, fmt.Sprintf("/events/%s", eventID), "event-"+eventID.String())
+	}
+	if delivered == 0 && target.Email != "" {
+		if err := s.mail.Send(target.Email, subject, body); err != nil {
+			log.Printf("events: notify invite to %s: %v", target.Email, err)
+		}
+	}
 }
 
 // Respond lets an invited user accept or decline their pending invitation.
