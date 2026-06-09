@@ -13,7 +13,7 @@ motocade.ru {
 	# regex: exact path or sub-paths only, never /authxyz).
 	@backend path /auth /auth/* /profile /profile/* /geo /geo/* /points /points/* \
 		/chat /chat/* /events /events/* /contacts /contacts/* /garage /garage/* \
-		/media /media/* /uploads /uploads/* /health /health/* /ws /ws/*
+		/push /push/* /media /media/* /uploads /uploads/* /health /health/* /ws /ws/*
 	handle @backend {
 		reverse_proxy app:8080   # Caddy upgrades WebSocket connections automatically
 	}
