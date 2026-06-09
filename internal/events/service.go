@@ -59,6 +59,7 @@ type CreateParams struct {
 	StartsAt    time.Time
 	Visibility  string
 	Details     json.RawMessage
+	Photos      []string
 	InviteeIDs  []uuid.UUID
 }
 
@@ -69,6 +70,7 @@ type UpdateParams struct {
 	StartsAt    *time.Time
 	Visibility  *string
 	Details     *json.RawMessage
+	Photos      *[]string
 }
 
 func (s *Service) ResolveUsername(ctx context.Context, username string) (uuid.UUID, error) {
@@ -102,6 +104,9 @@ func (s *Service) Create(ctx context.Context, ownerID uuid.UUID, p CreateParams)
 	if err := validateDetails(p.Type, p.Details); err != nil {
 		return Event{}, err
 	}
+	if p.Photos == nil {
+		p.Photos = []string{}
+	}
 
 	return s.repo.Create(ctx, Event{
 		OwnerID:     ownerID,
@@ -111,6 +116,7 @@ func (s *Service) Create(ctx context.Context, ownerID uuid.UUID, p CreateParams)
 		StartsAt:    p.StartsAt,
 		Visibility:  p.Visibility,
 		Details:     p.Details,
+		Photos:      p.Photos,
 	}, p.InviteeIDs)
 }
 
@@ -180,6 +186,9 @@ func (s *Service) Update(ctx context.Context, id, userID uuid.UUID, p UpdatePara
 	}
 	if p.Details != nil {
 		merged.Details = *p.Details
+	}
+	if p.Photos != nil {
+		merged.Photos = *p.Photos
 	}
 
 	if !validEventTypes[merged.Type] {

@@ -51,6 +51,7 @@ type Event struct {
 	StartsAt    time.Time       `json:"starts_at"`
 	Visibility  string          `json:"visibility"`
 	Details     json.RawMessage `json:"details"`
+	Photos      []string        `json:"photos"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 }

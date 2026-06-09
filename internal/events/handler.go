@@ -57,6 +57,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		StartsAt    time.Time       `json:"starts_at"`
 		Visibility  string          `json:"visibility"`
 		Details     json.RawMessage `json:"details"`
+		Photos      []string        `json:"photos"`
 		InviteeIDs  []uuid.UUID     `json:"invitee_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -71,6 +72,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		StartsAt:    req.StartsAt,
 		Visibility:  req.Visibility,
 		Details:     req.Details,
+		Photos:      req.Photos,
 		InviteeIDs:  req.InviteeIDs,
 	})
 	if err != nil {
@@ -110,6 +112,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		StartsAt    *time.Time       `json:"starts_at"`
 		Visibility  *string          `json:"visibility"`
 		Details     *json.RawMessage `json:"details"`
+		Photos      *[]string        `json:"photos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respond.Error(w, http.StatusBadRequest, "invalid request")
@@ -123,6 +126,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		StartsAt:    req.StartsAt,
 		Visibility:  req.Visibility,
 		Details:     req.Details,
+		Photos:      req.Photos,
 	})
 	if err != nil {
 		writeErr(w, err)

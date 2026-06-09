@@ -17,10 +17,10 @@ func NewRepository(db *sql.DB) *Repository {
 }
 
 // eventColumns is aliased for SELECTs that join event_participants as `e`.
-const eventColumns = `e.id, e.owner_id, e.type, e.title, e.description, e.starts_at, e.visibility, e.details, e.created_at, e.updated_at`
+const eventColumns = `e.id, e.owner_id, e.type, e.title, e.description, e.starts_at, e.visibility, e.details, e.photos, e.created_at, e.updated_at`
 
 // eventColumnsBare is the same list without the alias, for INSERT ... RETURNING.
-const eventColumnsBare = `id, owner_id, type, title, description, starts_at, visibility, details, created_at, updated_at`
+const eventColumnsBare = `id, owner_id, type, title, description, starts_at, visibility, details, photos, created_at, updated_at`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -29,14 +29,21 @@ type rowScanner interface {
 func scanEvent(s rowScanner) (Event, error) {
 	var e Event
 	var details []byte
+	var photosRaw []byte
 	if err := s.Scan(&e.ID, &e.OwnerID, &e.Type, &e.Title, &e.Description,
-		&e.StartsAt, &e.Visibility, &details, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		&e.StartsAt, &e.Visibility, &details, &photosRaw, &e.CreatedAt, &e.UpdatedAt); err != nil {
 		return Event{}, err
 	}
 	if len(details) > 0 {
 		e.Details = json.RawMessage(details)
 	} else {
 		e.Details = json.RawMessage("{}")
+	}
+	if len(photosRaw) > 0 {
+		json.Unmarshal(photosRaw, &e.Photos) //nolint:errcheck
+	}
+	if e.Photos == nil {
+		e.Photos = []string{}
 	}
 	return e, nil
 }
@@ -46,6 +53,14 @@ func detailsArg(d json.RawMessage) []byte {
 		return []byte("{}")
 	}
 	return []byte(d)
+}
+
+func photosArg(photos []string) []byte {
+	if photos == nil {
+		photos = []string{}
+	}
+	b, _ := json.Marshal(photos) //nolint:errcheck
+	return b
 }
 
 // Create inserts the event, adds the owner as an accepted participant, and adds
@@ -58,10 +73,10 @@ func (r *Repository) Create(ctx context.Context, e Event, inviteeIDs []uuid.UUID
 	defer tx.Rollback() //nolint:errcheck
 
 	created, err := scanEvent(tx.QueryRowContext(ctx, `
-		INSERT INTO events (owner_id, type, title, description, starts_at, visibility, details)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO events (owner_id, type, title, description, starts_at, visibility, details, photos)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING `+eventColumnsBare,
-		e.OwnerID, e.Type, e.Title, e.Description, e.StartsAt, e.Visibility, detailsArg(e.Details)))
+		e.OwnerID, e.Type, e.Title, e.Description, e.StartsAt, e.Visibility, detailsArg(e.Details), photosArg(e.Photos)))
 	if err != nil {
 		return Event{}, err
 	}
@@ -159,9 +174,9 @@ func (r *Repository) ListInvitations(ctx context.Context, userID uuid.UUID) ([]E
 func (r *Repository) Update(ctx context.Context, id, ownerID uuid.UUID, e Event) (bool, error) {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE events
-		SET type = $3, title = $4, description = $5, starts_at = $6, visibility = $7, details = $8, updated_at = NOW()
+		SET type = $3, title = $4, description = $5, starts_at = $6, visibility = $7, details = $8, photos = $9, updated_at = NOW()
 		WHERE id = $1 AND owner_id = $2
-	`, id, ownerID, e.Type, e.Title, e.Description, e.StartsAt, e.Visibility, detailsArg(e.Details))
+	`, id, ownerID, e.Type, e.Title, e.Description, e.StartsAt, e.Visibility, detailsArg(e.Details), photosArg(e.Photos))
 	if err != nil {
 		return false, err
 	}
