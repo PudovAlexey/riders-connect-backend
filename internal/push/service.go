@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -75,17 +76,21 @@ func (s *Service) SendToUser(ctx context.Context, userID uuid.UUID, title, body,
 			log.Printf("push: send to %s: %v", userID, err)
 			continue
 		}
-		resp.Body.Close()
 		switch {
 		case resp.StatusCode >= 200 && resp.StatusCode < 300:
+			resp.Body.Close()
 			delivered++
 		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
+			resp.Body.Close()
 			// Subscription is dead — drop it so we stop trying.
 			dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			_ = s.repo.DeleteByEndpoint(dctx, sub.Endpoint)
 			cancel()
 		default:
-			log.Printf("push: send to %s: status %d", userID, resp.StatusCode)
+			// Log the push service's error body (e.g. Apple's reason) to diagnose.
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			resp.Body.Close()
+			log.Printf("push: send to %s: status %d: %s", userID, resp.StatusCode, string(body))
 		}
 	}
 	return delivered
