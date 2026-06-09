@@ -68,8 +68,11 @@ cd "$REPO_DIR/deploy"
 # app image, so build it first, then run the binary's -genvapid mode.
 if ! grep -q '^VAPID_PRIVATE=' "$ENV_FILE"; then
   echo ">>> generating VAPID keys"
+  # Build the new image FIRST so the binary actually understands -genvapid (an
+  # old image would just boot the server and dump logs into .env). Keep only the
+  # VAPID_ lines so nothing else can corrupt .env.
   docker compose --env-file "$ENV_FILE" -f docker-compose.deploy.yml build app
-  docker compose --env-file "$ENV_FILE" -f docker-compose.deploy.yml run --rm --no-deps app ./server -genvapid >> "$ENV_FILE"
+  docker compose --env-file "$ENV_FILE" -f docker-compose.deploy.yml run --rm --no-deps app ./server -genvapid 2>/dev/null | grep '^VAPID_' >> "$ENV_FILE"
   echo "VAPID_SUBJECT=mailto:pudo-aleksej@yandex.ru" >> "$ENV_FILE"
 fi
 
