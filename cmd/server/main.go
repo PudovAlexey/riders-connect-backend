@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/elliptic"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
@@ -25,10 +27,20 @@ import (
 	"riders-connect/internal/push"
 )
 
+// vapidDecode decodes a base64url VAPID key, tolerating padded or raw form
+// (same logic webpush-go uses internally).
+func vapidDecode(key string) ([]byte, error) {
+	if b, err := base64.URLEncoding.DecodeString(key); err == nil {
+		return b, nil
+	}
+	return base64.RawURLEncoding.DecodeString(key)
+}
+
 func main() {
 	// -genvapid prints a fresh VAPID keypair (as env lines) and exits. Used by
 	// deploy/up.sh to seed deploy/.env on first run.
 	genVAPID := flag.Bool("genvapid", false, "generate a VAPID keypair and exit")
+	checkVAPID := flag.Bool("checkvapid", false, "verify the configured VAPID keypair matches and exit")
 	flag.Parse()
 	if *genVAPID {
 		priv, pub, err := webpush.GenerateVAPIDKeys()
@@ -36,6 +48,24 @@ func main() {
 			log.Fatalf("genvapid: %v", err)
 		}
 		fmt.Printf("VAPID_PUBLIC=%s\nVAPID_PRIVATE=%s\n", pub, priv)
+		return
+	}
+	if *checkVAPID {
+		c := config.Load()
+		priv, err := vapidDecode(c.VAPIDPrivate)
+		if err != nil {
+			log.Fatalf("checkvapid: bad VAPID_PRIVATE: %v", err)
+		}
+		x, y := elliptic.P256().ScalarBaseMult(priv)
+		derived := base64.RawURLEncoding.EncodeToString(elliptic.Marshal(elliptic.P256(), x, y))
+		fmt.Printf("VAPID_PUBLIC (configured): %s\n", c.VAPIDPublic)
+		fmt.Printf("VAPID_PUBLIC (derived)   : %s\n", derived)
+		fmt.Printf("VAPID_SUBJECT            : %s\n", c.VAPIDSubject)
+		if derived == c.VAPIDPublic {
+			fmt.Println("RESULT: MATCH ✓")
+		} else {
+			fmt.Println("RESULT: MISMATCH ✗  (regenerate keys)")
+		}
 		return
 	}
 
