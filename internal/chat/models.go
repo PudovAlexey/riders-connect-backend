@@ -51,19 +51,21 @@ type Chat struct {
 }
 
 type ChatMember struct {
-	UserID    uuid.UUID `json:"user_id"`
-	Name      string    `json:"name"`
-	Username  string    `json:"username"`
-	AvatarURL string    `json:"avatar_url"`
-	Role      string    `json:"role"`
+	UserID     uuid.UUID  `json:"user_id"`
+	Name       string     `json:"name"`
+	Username   string     `json:"username"`
+	AvatarURL  string     `json:"avatar_url"`
+	Role       string     `json:"role"`
+	LastReadAt *time.Time `json:"last_read_at,omitempty"`
 }
 
 // ChatListItem is the enriched chat shape returned to clients: the chat plus
-// its members and the most recent message.
+// its members, the most recent message, and the caller's unread count.
 type ChatListItem struct {
 	Chat
 	Members     []ChatMember `json:"members"`
 	LastMessage *Message     `json:"last_message,omitempty"`
+	UnreadCount int          `json:"unread_count"`
 }
 
 type Message struct {

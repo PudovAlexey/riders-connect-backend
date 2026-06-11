@@ -60,11 +60,51 @@ func broadcastMessageEdited(hub *Hub, memberIDs []uuid.UUID, msg *Message) {
 	hub.SendToUsers(memberIDs, data)
 }
 
+// wsChatUpdate carries a refreshed chat (title/avatar/members) to its members
+// so open clients update without a refetch.
+type wsChatUpdate struct {
+	Type string        `json:"type"`
+	Chat *ChatListItem `json:"chat"`
+}
+
+// broadcastChatUpdated fans the updated chat out to every current member.
+func broadcastChatUpdated(hub *Hub, memberIDs []uuid.UUID, item *ChatListItem) {
+	data, _ := json.Marshal(wsChatUpdate{Type: "chat_updated", Chat: item})
+	hub.SendToUsers(memberIDs, data)
+}
+
+// wsChatRemoved tells a single user they've been removed from (or left) a chat.
+type wsChatRemoved struct {
+	Type   string    `json:"type"`
+	ChatID uuid.UUID `json:"chat_id"`
+}
+
+// broadcastChatRemoved tells a removed member to drop the chat from their UI.
+func broadcastChatRemoved(hub *Hub, userID, chatID uuid.UUID) {
+	data, _ := json.Marshal(wsChatRemoved{Type: "chat_removed", ChatID: chatID})
+	hub.SendToUsers([]uuid.UUID{userID}, data)
+}
+
 // broadcastMessageDeleted notifies chat members that a message was deleted for
 // everyone. Only used for scope=all; "delete for me" is never broadcast.
 func broadcastMessageDeleted(hub *Hub, memberIDs []uuid.UUID, chatID, messageID uuid.UUID) {
 	cid, mid := chatID, messageID
 	data, _ := json.Marshal(wsOutgoing{Type: "message_deleted", ChatID: &cid, MessageID: &mid})
+	hub.SendToUsers(memberIDs, data)
+}
+
+// wsReceipt tells chat members that userID has read every message up to
+// lastReadAt, so senders can flip their own bubbles to "read".
+type wsReceipt struct {
+	Type       string    `json:"type"`
+	ChatID     uuid.UUID `json:"chat_id"`
+	UserID     uuid.UUID `json:"user_id"`
+	LastReadAt time.Time `json:"last_read_at"`
+}
+
+// broadcastReadReceipt fans a read-cursor update out to every chat member.
+func broadcastReadReceipt(hub *Hub, memberIDs []uuid.UUID, chatID, userID uuid.UUID, lastReadAt time.Time) {
+	data, _ := json.Marshal(wsReceipt{Type: "read_receipt", ChatID: chatID, UserID: userID, LastReadAt: lastReadAt})
 	hub.SendToUsers(memberIDs, data)
 }
 
@@ -223,6 +263,25 @@ func (h *WSHandler) readPump(conn *websocket.Conn, client *Client, userID uuid.U
 				}
 				broadcastMessageDeleted(h.hub, memberIDs, chatID, messageID)
 			}
+
+		case "read":
+			chatID, err := uuid.Parse(in.ChatID)
+			if err != nil {
+				continue
+			}
+			lastReadAt, err := h.svc.MarkRead(ctx, chatID, userID)
+			if err != nil {
+				log.Printf("ws read: %v", err)
+				continue
+			}
+			if lastReadAt == nil {
+				continue
+			}
+			memberIDs, err := h.svc.ListMemberIDs(ctx, chatID)
+			if err != nil {
+				continue
+			}
+			broadcastReadReceipt(h.hub, memberIDs, chatID, userID, *lastReadAt)
 
 		case "update_location":
 			if err := h.geoSvc.UpdateLocation(ctx, userID, in.Lat, in.Lon); err != nil {

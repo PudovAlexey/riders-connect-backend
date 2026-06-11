@@ -117,6 +117,15 @@ func (s *Service) ListMemberIDs(ctx context.Context, chatID uuid.UUID) ([]uuid.U
 	return s.repo.ListMemberIDs(ctx, chatID)
 }
 
+// MarkRead advances the requesting member's read cursor to the chat's newest
+// message. Returns the new cursor (nil if there was nothing to mark).
+func (s *Service) MarkRead(ctx context.Context, chatID, userID uuid.UUID) (*time.Time, error) {
+	if err := s.requireMember(ctx, chatID, userID); err != nil {
+		return nil, err
+	}
+	return s.repo.MarkRead(ctx, chatID, userID)
+}
+
 func (s *Service) AddMember(ctx context.Context, chatID, requesterID, targetID uuid.UUID) error {
 	ok, err := s.repo.IsMember(ctx, chatID, requesterID)
 	if err != nil {
@@ -130,6 +139,44 @@ func (s *Service) AddMember(ctx context.Context, chatID, requesterID, targetID u
 	}
 	go s.notifyAddedToGroup(requesterID, chatID, targetID)
 	return nil
+}
+
+// UpdateChat patches a group chat's title and/or avatar. Any member may edit.
+// Direct chats can't be renamed/re-skinned. nil fields are left unchanged.
+func (s *Service) UpdateChat(ctx context.Context, chatID, requesterID uuid.UUID, title, avatarURL *string) error {
+	if err := s.requireMember(ctx, chatID, requesterID); err != nil {
+		return err
+	}
+	chat, err := s.repo.GetChat(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	if chat == nil {
+		return ErrNotFound
+	}
+	if chat.Type != ChatTypeGroup {
+		return ErrForbidden
+	}
+	return s.repo.UpdateChat(ctx, chatID, title, avatarURL)
+}
+
+// RemoveMember drops a participant from a group chat. Any member may remove
+// anyone (including themselves — that's "leave group").
+func (s *Service) RemoveMember(ctx context.Context, chatID, requesterID, targetID uuid.UUID) error {
+	if err := s.requireMember(ctx, chatID, requesterID); err != nil {
+		return err
+	}
+	chat, err := s.repo.GetChat(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	if chat == nil {
+		return ErrNotFound
+	}
+	if chat.Type != ChatTypeGroup {
+		return ErrForbidden
+	}
+	return s.repo.RemoveMember(ctx, chatID, targetID)
 }
 
 func (s *Service) GetMessages(ctx context.Context, chatID, userID uuid.UUID, limit, offset int) ([]*Message, error) {

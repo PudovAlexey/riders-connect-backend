@@ -124,6 +124,85 @@ func (h *Handler) AddMember(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, item)
 }
 
+// UpdateChat patches a group chat's title and/or avatar, then broadcasts the
+// refreshed chat to every member.
+func (h *Handler) UpdateChat(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.GetUserID(r.Context())
+	chatID, err := uuid.Parse(chi.URLParam(r, "chatID"))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid chat id")
+		return
+	}
+	var req struct {
+		Title     *string `json:"title"`
+		AvatarURL *string `json:"avatar_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if req.Title != nil {
+		trimmed := strings.TrimSpace(*req.Title)
+		if trimmed == "" {
+			respond.Error(w, http.StatusBadRequest, "title cannot be empty")
+			return
+		}
+		req.Title = &trimmed
+	}
+	if err := h.svc.UpdateChat(r.Context(), chatID, userID, req.Title, req.AvatarURL); err != nil {
+		h.writeChatErr(w, err)
+		return
+	}
+	item, err := h.svc.GetChatItem(r.Context(), chatID, userID)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if memberIDs, err := h.svc.ListMemberIDs(r.Context(), chatID); err == nil {
+		broadcastChatUpdated(h.hub, memberIDs, item)
+	}
+	respond.JSON(w, http.StatusOK, item)
+}
+
+// RemoveMember drops a participant (or the caller themselves) from a group chat.
+// The removed member is told to drop the chat; remaining members get a refresh.
+func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.GetUserID(r.Context())
+	chatID, err := uuid.Parse(chi.URLParam(r, "chatID"))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid chat id")
+		return
+	}
+	targetID, err := uuid.Parse(chi.URLParam(r, "userID"))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if err := h.svc.RemoveMember(r.Context(), chatID, userID, targetID); err != nil {
+		h.writeChatErr(w, err)
+		return
+	}
+	broadcastChatRemoved(h.hub, targetID, chatID)
+	if memberIDs, err := h.svc.ListMemberIDs(r.Context(), chatID); err == nil && len(memberIDs) > 0 {
+		if item, err := h.svc.GetChatItem(r.Context(), chatID, memberIDs[0]); err == nil {
+			broadcastChatUpdated(h.hub, memberIDs, item)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeChatErr maps chat-mutation service errors to HTTP responses.
+func (h *Handler) writeChatErr(w http.ResponseWriter, err error) {
+	switch err {
+	case ErrForbidden:
+		respond.Error(w, http.StatusForbidden, "forbidden")
+	case ErrNotFound:
+		respond.Error(w, http.StatusNotFound, "not found")
+	default:
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+	}
+}
+
 func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.GetUserID(r.Context())
 	chatID, err := uuid.Parse(chi.URLParam(r, "chatID"))
@@ -252,6 +331,28 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	if scope == DeleteScopeAll {
 		if memberIDs, err := h.svc.ListMemberIDs(r.Context(), chatID); err == nil {
 			broadcastMessageDeleted(h.hub, memberIDs, chatID, messageID)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// MarkRead advances the caller's read cursor for a chat and broadcasts the
+// resulting receipt. WebSocket is the primary path; this is the REST fallback.
+func (h *Handler) MarkRead(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.GetUserID(r.Context())
+	chatID, err := uuid.Parse(chi.URLParam(r, "chatID"))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid chat id")
+		return
+	}
+	lastReadAt, err := h.svc.MarkRead(r.Context(), chatID, userID)
+	if err != nil {
+		h.writeMessageErr(w, err)
+		return
+	}
+	if lastReadAt != nil {
+		if memberIDs, err := h.svc.ListMemberIDs(r.Context(), chatID); err == nil {
+			broadcastReadReceipt(h.hub, memberIDs, chatID, userID, *lastReadAt)
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)

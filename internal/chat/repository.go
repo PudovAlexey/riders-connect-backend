@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -136,7 +137,7 @@ func (r *Repository) ListMemberIDs(ctx context.Context, chatID uuid.UUID) ([]uui
 
 func (r *Repository) ListMembers(ctx context.Context, chatID uuid.UUID) ([]ChatMember, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT cm.user_id, u.name, COALESCE(u.username, ''), u.avatar_url, cm.role
+		SELECT cm.user_id, u.name, COALESCE(u.username, ''), u.avatar_url, cm.role, cm.last_read_at
 		FROM chat_members cm
 		JOIN users u ON u.id = cm.user_id
 		WHERE cm.chat_id = $1
@@ -150,8 +151,12 @@ func (r *Repository) ListMembers(ctx context.Context, chatID uuid.UUID) ([]ChatM
 	var members []ChatMember
 	for rows.Next() {
 		var m ChatMember
-		if err := rows.Scan(&m.UserID, &m.Name, &m.Username, &m.AvatarURL, &m.Role); err != nil {
+		var lastRead sql.NullTime
+		if err := rows.Scan(&m.UserID, &m.Name, &m.Username, &m.AvatarURL, &m.Role, &lastRead); err != nil {
 			return nil, err
+		}
+		if lastRead.Valid {
+			m.LastReadAt = &lastRead.Time
 		}
 		members = append(members, m)
 	}
@@ -166,12 +171,42 @@ func (r *Repository) AddMember(ctx context.Context, chatID, userID uuid.UUID) er
 	return err
 }
 
+func (r *Repository) RemoveMember(ctx context.Context, chatID, userID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `
+		DELETE FROM chat_members WHERE chat_id = $1 AND user_id = $2
+	`, chatID, userID)
+	return err
+}
+
+// UpdateChat patches a chat's title and/or avatar. nil fields are left as-is
+// (COALESCE), so callers update only what they pass.
+func (r *Repository) UpdateChat(ctx context.Context, chatID uuid.UUID, title, avatarURL *string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE chats SET
+			title = COALESCE($2, title),
+			avatar_url = COALESCE($3, avatar_url)
+		WHERE id = $1
+	`, chatID, title, avatarURL)
+	return err
+}
+
 // ListChats returns the chats a user belongs to, ordered by most recent
 // activity, enriched with members and the last message.
 func (r *Repository) ListChats(ctx context.Context, userID uuid.UUID) ([]*ChatListItem, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT c.id, c.type, c.title, c.avatar_url, c.created_by, c.created_at,
-		       lm.id, lm.sender_id, lm.content, lm.message_type, lm.attachment_url, lm.attachment_meta, lm.created_at
+		       lm.id, lm.sender_id, lm.content, lm.message_type, lm.attachment_url, lm.attachment_meta, lm.created_at,
+		       (
+		           SELECT COUNT(*) FROM messages um
+		           WHERE um.chat_id = c.id
+		             AND um.deleted_at IS NULL
+		             AND um.sender_id <> $1
+		             AND (me.last_read_at IS NULL OR um.created_at > me.last_read_at)
+		             AND NOT EXISTS (
+		                 SELECT 1 FROM message_hidden h
+		                 WHERE h.message_id = um.id AND h.user_id = $1
+		             )
+		       ) AS unread_count
 		FROM chats c
 		JOIN chat_members me ON me.chat_id = c.id AND me.user_id = $1
 		LEFT JOIN LATERAL (
@@ -198,14 +233,17 @@ func (r *Repository) ListChats(ctx context.Context, userID uuid.UUID) ([]*ChatLi
 			mAttURL  sql.NullString
 			mMeta    []byte
 			mCreated sql.NullTime
+			unread   int
 		)
 		if err := rows.Scan(
 			&item.ID, &item.Type, &item.Title, &item.AvatarURL, &createdBy, &item.CreatedAt,
 			&mID, &mSender, &mContent, &mType, &mAttURL, &mMeta, &mCreated,
+			&unread,
 		); err != nil {
 			return nil, err
 		}
 		item.CreatedBy = createdBy.UUID
+		item.UnreadCount = unread
 		if mID.Valid {
 			msg := &Message{
 				ID:            mID.UUID,
@@ -363,4 +401,29 @@ func (r *Repository) HideMessageForUser(ctx context.Context, messageID, userID u
 		ON CONFLICT DO NOTHING
 	`, messageID, userID)
 	return err
+}
+
+// MarkRead advances the member's read cursor to the chat's newest message. The
+// cursor only ever moves forward (GREATEST). Returns the new cursor, or nil when
+// the chat has no messages (nothing to mark) or the user is not a member.
+func (r *Repository) MarkRead(ctx context.Context, chatID, userID uuid.UUID) (*time.Time, error) {
+	var t sql.NullTime
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE chat_members cm
+		SET last_read_at = GREATEST(COALESCE(cm.last_read_at, 'epoch'::timestamptz), sub.t)
+		FROM (SELECT MAX(created_at) AS t FROM messages
+		      WHERE chat_id = $1 AND deleted_at IS NULL) sub
+		WHERE cm.chat_id = $1 AND cm.user_id = $2 AND sub.t IS NOT NULL
+		RETURNING cm.last_read_at
+	`, chatID, userID).Scan(&t)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !t.Valid {
+		return nil, nil
+	}
+	return &t.Time, nil
 }

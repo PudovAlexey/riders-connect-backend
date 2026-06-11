@@ -182,9 +182,12 @@ func main() {
 		r.Route("/chat", func(r chi.Router) {
 			r.Get("/chats", chatHandler.ListChats)
 			r.Post("/chats", chatHandler.CreateChat)
+			r.Patch("/chats/{chatID}", chatHandler.UpdateChat)
 			r.Post("/chats/{chatID}/members", chatHandler.AddMember)
+			r.Delete("/chats/{chatID}/members/{userID}", chatHandler.RemoveMember)
 			r.Get("/chats/{chatID}/messages", chatHandler.GetMessages)
 			r.Post("/chats/{chatID}/messages", chatHandler.SendMessage)
+			r.Post("/chats/{chatID}/read", chatHandler.MarkRead)
 			r.Patch("/chats/{chatID}/messages/{messageID}", chatHandler.EditMessage)
 			r.Delete("/chats/{chatID}/messages/{messageID}", chatHandler.DeleteMessage)
 		})
