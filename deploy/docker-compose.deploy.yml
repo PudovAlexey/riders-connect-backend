@@ -32,6 +32,10 @@ services:
       SMTP_PORT: ${SMTP_PORT}
       SMTP_FROM: ${SMTP_FROM}
       SMTP_PASS: ${SMTP_PASS}
+      # When set, mail goes out over Brevo's HTTPS API instead of SMTP (the host
+      # blocks SMTP and has no global IPv6). Empty → falls back to SMTP.
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-Riders Connect}
       VAPID_PUBLIC: ${VAPID_PUBLIC}
       VAPID_PRIVATE: ${VAPID_PRIVATE}
       VAPID_SUBJECT: ${VAPID_SUBJECT}

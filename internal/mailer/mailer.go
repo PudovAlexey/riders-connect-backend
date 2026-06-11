@@ -1,37 +1,57 @@
-// Package mailer is the single SMTP transport used across the app (auth login
-// codes, chat/event notifications). The dial logic is intentionally identical to
-// what auth used before — bounded timeouts plus plain "tcp" so happy-eyeballs can
-// reach the provider over IPv6 (the hoster blocks outbound IPv4 SMTP).
+// Package mailer is the single email transport used across the app (auth login
+// codes, chat/event notifications).
+//
+// Two transports, picked at construction:
+//   - HTTP API (Brevo) when EMAIL_API_KEY is set — a plain HTTPS POST. This is
+//     the production path: the hoster blocks outbound SMTP (25/465/587/2525) and
+//     the IPv6/NAT66 workaround keeps dying (the VM has no global IPv6), so SMTP
+//     from this server is unreliable. HTTPS egress works fine.
+//   - SMTP otherwise — kept as a fallback / for environments where it works. The
+//     dial uses plain "tcp" so happy-eyeballs can reach the provider over IPv6.
 package mailer
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net"
+	"net/http"
 	"net/smtp"
 	"time"
 
 	"riders-connect/internal/config"
 )
 
+// brevoEndpoint is Brevo's transactional email API. Auth is the api-key header.
+const brevoEndpoint = "https://api.brevo.com/v3/smtp/email"
+
 type Mailer struct {
-	host string
-	port string
-	from string
-	pass string
-	dev  bool
+	host     string
+	port     string
+	from     string
+	pass     string
+	apiKey   string // Brevo HTTP API key; when set, HTTP transport is used.
+	fromName string
+	dev      bool
+	http     *http.Client
 }
 
 func New(cfg *config.Config) *Mailer {
 	return &Mailer{
-		host: cfg.SMTPHost,
-		port: cfg.SMTPPort,
-		from: cfg.SMTPFrom,
-		pass: cfg.SMTPPass,
-		// No real sender configured (or dev env) → don't talk to SMTP, just log.
-		dev: cfg.AppEnv == "development" || cfg.SMTPFrom == "",
+		host:     cfg.SMTPHost,
+		port:     cfg.SMTPPort,
+		from:     cfg.SMTPFrom,
+		pass:     cfg.SMTPPass,
+		apiKey:   cfg.EmailAPIKey,
+		fromName: cfg.EmailFromName,
+		// No real sender configured (or dev env) → don't talk to any provider,
+		// just log. A "from" address is required for both transports.
+		dev:  cfg.AppEnv == "development" || cfg.SMTPFrom == "",
+		http: &http.Client{Timeout: 20 * time.Second},
 	}
 }
 
@@ -43,7 +63,56 @@ func (m *Mailer) Send(to, subject, body string) error {
 		log.Printf("[DEV] email -> %s | %s\n%s", to, subject, body)
 		return nil
 	}
+	if m.apiKey != "" {
+		return m.sendHTTP(to, subject, body)
+	}
+	return m.sendSMTP(to, subject, body)
+}
 
+// sendHTTP posts the message to Brevo's transactional API over HTTPS. No SMTP,
+// no IPv6 dependency — this is the production transport.
+func (m *Mailer) sendHTTP(to, subject, body string) error {
+	fromName := m.fromName
+	if fromName == "" {
+		fromName = "Riders Connect"
+	}
+	payload := map[string]any{
+		"sender":      map[string]string{"email": m.from, "name": fromName},
+		"to":          []map[string]string{{"email": to}},
+		"subject":     subject,
+		"textContent": body,
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, brevoEndpoint, bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("api-key", m.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		// Surface Brevo's error body (bad key, unverified sender, quota) so the
+		// auth log line is actionable. Cap it so a huge body can't flood logs.
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("brevo send failed: %s: %s", resp.Status, string(b))
+	}
+	return nil
+}
+
+// sendSMTP is the legacy transport. Kept as a fallback; see the package doc for
+// why it's unreliable on the production host.
+func (m *Mailer) sendSMTP(to, subject, body string) error {
 	addr := m.host + ":" + m.port
 	// Encode the Subject so non-ASCII (Cyrillic) renders correctly in clients.
 	encSubject := mime.QEncoding.Encode("utf-8", subject)

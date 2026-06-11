@@ -14,6 +14,8 @@ type Config struct {
 	SMTPPort      string
 	SMTPFrom      string
 	SMTPPass      string
+	EmailAPIKey   string
+	EmailFromName string
 	AppEnv        string
 	UploadDir     string
 	UploadBaseURL string
@@ -33,6 +35,11 @@ func Load() *Config {
 		SMTPPort:      getEnv("SMTP_PORT", "587"),
 		SMTPFrom:      getEnv("SMTP_FROM", ""),
 		SMTPPass:      getEnv("SMTP_PASS", ""),
+		// HTTP email API (Brevo). When EMAIL_API_KEY is set, mail goes out over
+		// plain HTTPS instead of SMTP — the hoster blocks outbound SMTP and the
+		// IPv6/NAT66 workaround keeps breaking (no global IPv6 on the VM).
+		EmailAPIKey:   getEnv("EMAIL_API_KEY", ""),
+		EmailFromName: getEnv("EMAIL_FROM_NAME", "Riders Connect"),
 		AppEnv:        getEnv("APP_ENV", "development"),
 		UploadDir:     getEnv("UPLOAD_DIR", "./uploads"),
 		UploadBaseURL: getEnv("UPLOAD_BASE_URL", "http://localhost:8080"),
