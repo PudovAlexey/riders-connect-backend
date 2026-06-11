@@ -1,13 +1,16 @@
 // Package mailer is the single email transport used across the app (auth login
 // codes, chat/event notifications).
 //
-// Two transports, picked at construction:
-//   - HTTP API (Brevo) when EMAIL_API_KEY is set — a plain HTTPS POST. This is
-//     the production path: the hoster blocks outbound SMTP (25/465/587/2525) and
-//     the IPv6/NAT66 workaround keeps dying (the VM has no global IPv6), so SMTP
-//     from this server is unreliable. HTTPS egress works fine.
+// Transports, picked at construction in priority order:
+//   - HTTP API (Mailopost) when MAILOPOST_TOKEN is set — a plain HTTPS POST with a
+//     Bearer token. Sends to arbitrary recipients, no per-recipient setup.
+//   - HTTP API (Brevo) when EMAIL_API_KEY is set — a plain HTTPS POST.
 //   - SMTP otherwise — kept as a fallback / for environments where it works. The
 //     dial uses plain "tcp" so happy-eyeballs can reach the provider over IPv6.
+//
+// The HTTP transports are the production path: the hoster blocks outbound SMTP
+// (25/465/587/2525) and the IPv6/NAT66 workaround keeps dying (the VM has no
+// global IPv6), so SMTP from this server is unreliable. HTTPS egress works fine.
 package mailer
 
 import (
@@ -29,25 +32,30 @@ import (
 // brevoEndpoint is Brevo's transactional email API. Auth is the api-key header.
 const brevoEndpoint = "https://api.brevo.com/v3/smtp/email"
 
+// mailopostEndpoint is Mailopost's transactional email API. Auth is a Bearer token.
+const mailopostEndpoint = "https://api.mailopost.ru/v1/email/messages"
+
 type Mailer struct {
-	host     string
-	port     string
-	from     string
-	pass     string
-	apiKey   string // Brevo HTTP API key; when set, HTTP transport is used.
-	fromName string
-	dev      bool
-	http     *http.Client
+	host           string
+	port           string
+	from           string
+	pass           string
+	apiKey         string // Brevo HTTP API key; when set, Brevo HTTP transport is used.
+	mailopostToken string // Mailopost Bearer token; takes priority when set.
+	fromName       string
+	dev            bool
+	http           *http.Client
 }
 
 func New(cfg *config.Config) *Mailer {
 	return &Mailer{
-		host:     cfg.SMTPHost,
-		port:     cfg.SMTPPort,
-		from:     cfg.SMTPFrom,
-		pass:     cfg.SMTPPass,
-		apiKey:   cfg.EmailAPIKey,
-		fromName: cfg.EmailFromName,
+		host:           cfg.SMTPHost,
+		port:           cfg.SMTPPort,
+		from:           cfg.SMTPFrom,
+		pass:           cfg.SMTPPass,
+		apiKey:         cfg.EmailAPIKey,
+		mailopostToken: cfg.MailopostToken,
+		fromName:       cfg.EmailFromName,
 		// No real sender configured (or dev env) → don't talk to any provider,
 		// just log. A "from" address is required for both transports.
 		dev:  cfg.AppEnv == "development" || cfg.SMTPFrom == "",
@@ -63,10 +71,56 @@ func (m *Mailer) Send(to, subject, body string) error {
 		log.Printf("[DEV] email -> %s | %s\n%s", to, subject, body)
 		return nil
 	}
+	if m.mailopostToken != "" {
+		return m.sendMailopost(to, subject, body)
+	}
 	if m.apiKey != "" {
 		return m.sendHTTP(to, subject, body)
 	}
 	return m.sendSMTP(to, subject, body)
+}
+
+// sendMailopost posts the message to Mailopost's transactional API over HTTPS.
+// Like the Brevo path, no SMTP and no IPv6 dependency. Auth is a Bearer token;
+// from_email must be on a domain verified in the Mailopost account.
+func (m *Mailer) sendMailopost(to, subject, body string) error {
+	fromName := m.fromName
+	if fromName == "" {
+		fromName = "Riders Connect"
+	}
+	payload := map[string]any{
+		"from_email": m.from,
+		"from_name":  fromName,
+		"to":         to,
+		"subject":    subject,
+		"text":       body,
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, mailopostEndpoint, bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+m.mailopostToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		// Surface Mailopost's error body (bad token, unverified domain, quota) so
+		// the auth log line is actionable. Cap it so a huge body can't flood logs.
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("mailopost send failed: %s: %s", resp.Status, string(b))
+	}
+	return nil
 }
 
 // sendHTTP posts the message to Brevo's transactional API over HTTPS. No SMTP,

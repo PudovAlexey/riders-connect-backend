@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"log"
 	"math/big"
@@ -45,12 +46,21 @@ func (s *Service) SendCode(ctx context.Context, email string) error {
 }
 
 func (s *Service) Verify(ctx context.Context, email, code string) (string, *models.User, error) {
-	ok, err := s.repo.VerifyCode(ctx, email, code)
-	if err != nil {
-		return "", nil, err
-	}
-	if !ok {
-		return "", nil, ErrInvalidCode
+	// TEMPORARY master-code bypass (AUTH_MASTER_CODE). When set, this code is
+	// accepted for ANY email so logins keep working while email delivery is down.
+	// This is a FULL AUTH BYPASS — keep the env var set only during the outage and
+	// remove it the moment a real mail transport works. Constant-time compare so
+	// the code can't be guessed via timing; each use is logged for an audit trail.
+	if m := s.cfg.AuthMasterCode; m != "" && subtle.ConstantTimeCompare([]byte(code), []byte(m)) == 1 {
+		log.Printf("auth: MASTER CODE bypass used for %s", email)
+	} else {
+		ok, err := s.repo.VerifyCode(ctx, email, code)
+		if err != nil {
+			return "", nil, err
+		}
+		if !ok {
+			return "", nil, ErrInvalidCode
+		}
 	}
 	user, err := s.repo.UpsertUser(ctx, email)
 	if err != nil {
