@@ -198,7 +198,12 @@ func main() {
 		r.Route("/garage", func(r chi.Router) {
 			r.Get("/", garageHandler.List)
 			r.Post("/", garageHandler.Add)
+			r.Patch("/{id}", garageHandler.UpdateVehicle)
 			r.Delete("/{id}", garageHandler.Delete)
+			r.Post("/{id}/service", garageHandler.AddServiceItem)
+			r.Patch("/{id}/service/{itemID}", garageHandler.UpdateServiceItem)
+			r.Post("/{id}/service/{itemID}/reset", garageHandler.ResetServiceItem)
+			r.Delete("/{id}/service/{itemID}", garageHandler.DeleteServiceItem)
 		})
 
 		r.Route("/events", func(r chi.Router) {
