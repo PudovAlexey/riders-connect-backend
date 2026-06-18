@@ -68,6 +68,10 @@ type Point struct {
 	Website     string    `json:"website"`
 	Hours       string    `json:"hours"`
 	Photos      []string  `json:"photos"`
+	// AvgRating and ReviewCount are aggregates over point_reviews, filled on reads
+	// (List/Get). A point with no reviews reports 0/0.
+	AvgRating   float64   `json:"avg_rating"`
+	ReviewCount int       `json:"review_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
