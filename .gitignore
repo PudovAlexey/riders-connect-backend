@@ -15,6 +15,10 @@
 *.out
 bin/
 
+# cmd/photos local artifacts: dry-run preview + cross-compiled binaries
+/photos-preview.html
+/photos-linux-*
+
 # OS / editor
 .DS_Store
 *.swp
