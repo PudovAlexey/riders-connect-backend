@@ -26,6 +26,7 @@ import (
 	"riders-connect/internal/profile"
 	"riders-connect/internal/push"
 	"riders-connect/internal/reviews"
+	"riders-connect/internal/routes"
 )
 
 // vapidDecode decodes a base64url VAPID key, tolerating padded or raw form
@@ -87,6 +88,7 @@ func main() {
 	eventsRepo := events.NewRepository(db)
 	pointsRepo := points.NewRepository(db)
 	reviewsRepo := reviews.NewRepository(db)
+	routesRepo := routes.NewRepository(db)
 	pushRepo := push.NewRepository(db)
 
 	// Shared SMTP transport for login codes + notification emails.
@@ -104,6 +106,7 @@ func main() {
 	eventsSvc := events.NewService(eventsRepo, profileSvc, mail, pushSvc, cfg.UploadBaseURL)
 	pointsSvc := points.NewService(pointsRepo)
 	reviewsSvc := reviews.NewService(reviewsRepo)
+	routesSvc := routes.NewService(routesRepo)
 
 	hub := chat.NewHub()
 	go hub.Run()
@@ -118,6 +121,7 @@ func main() {
 	eventsHandler := events.NewHandler(eventsSvc)
 	pointsHandler := points.NewHandler(pointsSvc)
 	reviewsHandler := reviews.NewHandler(reviewsSvc)
+	routesHandler := routes.NewHandler(routesSvc)
 	pushHandler := push.NewHandler(pushSvc)
 
 	mediaHandler, err := media.NewHandler(cfg.UploadDir, cfg.UploadBaseURL)
@@ -225,6 +229,15 @@ func main() {
 			r.Post("/{id}/invite", eventsHandler.Invite)
 			r.Post("/{id}/respond", eventsHandler.Respond)
 			r.Delete("/{id}/participants/{userID}", eventsHandler.RemoveParticipant)
+		})
+
+		r.Route("/routes", func(r chi.Router) {
+			r.Get("/suggested", routesHandler.ListSuggested) // before /{id} so it is not captured
+			r.Get("/", routesHandler.List)
+			r.Post("/", routesHandler.Create)
+			r.Get("/{id}", routesHandler.Get)
+			r.Patch("/{id}", routesHandler.Update)
+			r.Delete("/{id}", routesHandler.Delete)
 		})
 
 		r.Route("/push", func(r chi.Router) {
