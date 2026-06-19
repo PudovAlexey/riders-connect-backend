@@ -12,7 +12,7 @@ motocade.ru {
 	# API + uploads + WebSocket -> Go backend (boundary-matched like the old nginx
 	# regex: exact path or sub-paths only, never /authxyz).
 	@backend path /auth /auth/* /profile /profile/* /geo /geo/* /points /points/* \
-		/chat /chat/* /events /events/* /contacts /contacts/* /garage /garage/* \
+		/routes /routes/* /chat /chat/* /events /events/* /contacts /contacts/* /garage /garage/* \
 		/push /push/* /media /media/* /uploads /uploads/* /health /health/* /ws /ws/*
 	handle @backend {
 		reverse_proxy app:8080   # Caddy upgrades WebSocket connections automatically
