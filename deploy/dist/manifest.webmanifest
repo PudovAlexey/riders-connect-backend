@@ -1,6 +1,8 @@
 {
-  "name": "Riders Connect",
-  "short_name": "Riders",
+  "name": "Motocade",
+  "short_name": "Motocade",
+  "lang": "ru",
+  "dir": "ltr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

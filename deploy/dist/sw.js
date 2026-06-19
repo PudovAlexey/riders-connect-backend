@@ -13,7 +13,7 @@ self.addEventListener('push', (event) => {
   } catch {
     data = { body: event.data ? event.data.text() : '' }
   }
-  const title = data.title || 'Riders Connect'
+  const title = data.title || 'Motocade'
   const options = {
     body: data.body || '',
     icon: '/icon-192.png',
